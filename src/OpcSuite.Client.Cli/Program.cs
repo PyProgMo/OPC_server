@@ -20,6 +20,7 @@ foreach (var command in ClientCommands.Create(new ConnectEachTime(options)))
 {
     root.Subcommands.Add(command);
 }
+root.Subcommands.Add(HandshakeCommand.Create(options));
 root.Subcommands.Add(ShellCommand.Create(options));
 root.Subcommands.Add(EndpointsCommand(options));
 root.Subcommands.Add(TrustCommands.CreateTrust(options.Pki));

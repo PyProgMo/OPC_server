@@ -34,17 +34,36 @@ it is a deliberate later step (versions are centralised in `Directory.Packages.p
 Needs the .NET 10 SDK (if `dotnet` is not found, an SDK may be in `~/.dotnet`).
 
 ```bash
-dotnet build
-dotnet test                       # integration tests start a real encrypted server
+# terminal 1 - build and start the server (creates its certificate on first start, prints its SHA-256)
+scripts/start-server.sh
 
-# terminal 1 - server (creates its certificate on first start and prints its SHA-256)
-dotnet run --project src/OpcSuite.Server.Cli -- run
-
-# terminal 2 - client. First contact: the client asks whether to trust the server.
-dotnet run --project src/OpcSuite.Client.Cli -- info
+# terminal 2 - build the client and run the first-connection handshake
+scripts/run-client.sh
 ```
 
-The first `info` is refused by the server because it doesn't know the client yet (see next section).
+The scripts build first (`--no-build` skips that, `--debug` switches configuration) and find the SDK even
+when `dotnet` isn't on `PATH`. Anything else is passed through to the program, so
+`scripts/start-server.sh --url opc.tcp://localhost:4850/OpcSuite` and
+`scripts/run-client.sh -e opc.tcp://localhost:4850/OpcSuite handshake` work as you'd expect; with only
+options and no command, the client script runs `handshake`. `dotnet test` runs the test suite.
+
+The first handshake is refused because the server doesn't know the client yet; that is the trust
+step described below.
+
+### The first connection: `opcctl handshake`
+
+`handshake` connects in three narrated steps and tells you what to do when one fails:
+
+```
+[1/3] Discovery            what the server offers, its certificate SHA-256, whether you trust it yet
+[2/3] Encrypted channel    both certificates are checked; shows the client certificate the server accepted
+[3/3] Server status        first encrypted request: server name, state, round-trip time
+```
+
+Typical failures and their messages: server not running (start it with the script), the server doesn't
+offer the required protection (`--security` mismatch), the server doesn't trust this client yet (prints the
+`opcserver trust accept <fingerprint>` command to run), or this client doesn't trust the server (prints how
+to pin its SHA-256).
 `dotnet publish src/OpcSuite.Server.Cli -c Release -o out/server` produces the `opcserver` executable
 (add `--self-contained` for one that needs no installed runtime); the client project produces `opcctl`.
 
@@ -75,6 +94,7 @@ opcctl read  "nsu=urn:opcsuite:modules;s=Demo/Counter" "nsu=urn:opcsuite:modules
 opcctl write "nsu=urn:opcsuite:modules;s=Demo/Setpoint" 42.5
 opcctl subscribe "nsu=urn:opcsuite:modules;s=Demo/Sensors/Temperature" -i 500
 opcctl shell                      # connect once, run many commands
+opcctl handshake                  # the first connection, step by step
 opcctl endpoints                  # what the server advertises (unauthenticated)
 ```
 

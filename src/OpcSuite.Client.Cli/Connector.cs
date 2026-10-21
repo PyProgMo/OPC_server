@@ -23,6 +23,12 @@ internal static class Connector
     public static async Task<OpcClient> ConnectAsync(ConnectionSettings settings, CancellationToken ct)
     {
         var (crypto, telemetry) = CreateCrypto(settings);
+        return await ConnectAsync(settings, crypto, telemetry, ct);
+    }
+
+    public static async Task<OpcClient> ConnectAsync(
+        ConnectionSettings settings, OpcUaCryptoModule crypto, ITelemetryContext telemetry, CancellationToken ct, bool printHint = true)
+    {
         try
         {
             return await OpcClient.ConnectAsync(
@@ -30,7 +36,10 @@ internal static class Connector
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await PrintHintAsync(crypto, ex);
+            if (printHint)
+            {
+                await PrintHintAsync(crypto, ex);
+            }
             throw;
         }
     }
@@ -46,7 +55,7 @@ internal static class Connector
         return Console.ReadLine()?.Trim().ToLowerInvariant() is "y" or "yes";
     }
 
-    private static async Task PrintHintAsync(OpcUaCryptoModule crypto, Exception ex)
+    public static async Task PrintHintAsync(OpcUaCryptoModule crypto, Exception ex)
     {
         switch ((ex as ServiceResultException)?.StatusCode)
         {
