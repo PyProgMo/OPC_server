@@ -9,7 +9,8 @@ namespace OpcSuite.Client;
 
 /// <summary>
 /// A connected, encrypted OPC UA session. The connection only succeeds if the server offers exactly the
-/// <see cref="ICryptoModule.Profile"/> and its certificate is accepted by the crypto module's trust policy.
+/// <see cref="ICryptoModule.Profile"/>, its certificate is accepted by the crypto module's trust policy and the server
+/// accepts the <see cref="ClientOptions.Login"/>.
 /// </summary>
 public sealed class OpcClient : IAsyncDisposable
 {
@@ -51,6 +52,10 @@ public sealed class OpcClient : IAsyncDisposable
         await crypto.ActivateAsync(application, ct).ConfigureAwait(false);
 
         var endpoint = await SelectEndpointAsync(configuration, endpointUrl, crypto, ct).ConfigureAwait(false);
+        if (!endpoint.UserIdentityTokens.Any(t => t.TokenType == options.Login.TokenType))
+        {
+            throw new LoginNotAcceptedException(options.Login.TokenType, UserLogin.Accepted(endpoint));
+        }
 
         var configured = new ConfiguredEndpoint(null, endpoint, EndpointConfiguration.Create(configuration));
         var session = await new DefaultSessionFactory(telemetry)
@@ -61,7 +66,7 @@ public sealed class OpcClient : IAsyncDisposable
                 checkDomain: options.CheckServerHostName,
                 options.ApplicationName,
                 (uint)options.SessionTimeout.TotalMilliseconds,
-                new UserIdentity(),
+                options.Login.CreateIdentity(),
                 preferredLocales: null,
                 ct)
             .ConfigureAwait(false);
@@ -72,7 +77,8 @@ public sealed class OpcClient : IAsyncDisposable
             crypto.Profile.Name,
             endpoint.SecurityMode.ToString(),
             serverCertificate.Subject,
-            Fingerprint.Sha256(serverCertificate)));
+            Fingerprint.Sha256(serverCertificate),
+            options.Login.Description));
     }
 
     /// <summary>Lists the endpoints the server advertises, without connecting a session.</summary>
@@ -139,6 +145,28 @@ public sealed class OpcClient : IAsyncDisposable
         var id = ParseNodeId(nodeId);
         var value = await _session.ReadValueAsync(id, ct).ConfigureAwait(false);
         return ToNodeValue(id, value);
+    }
+
+    /// <summary>
+    /// What the logged-in user may do with each node, from its UserAccessLevel: the server combines what the node
+    /// supports with what the user's roles are allowed. Nodes that are not variables, or cannot be seen, allow nothing.
+    /// </summary>
+    public async Task<IReadOnlyList<UserAccess>> GetUserAccessAsync(IReadOnlyList<string> nodeIds, CancellationToken ct = default)
+    {
+        if (nodeIds.Count == 0)
+        {
+            return [];
+        }
+        var request = new ReadValueIdCollection(nodeIds.Select(n => new ReadValueId { NodeId = ParseNodeId(n), AttributeId = Attributes.UserAccessLevel }));
+        var response = await _session.ReadAsync(null, 0, TimestampsToReturn.Neither, request, ct).ConfigureAwait(false);
+        return nodeIds
+            .Select((id, i) =>
+            {
+                var result = response.Results[i];
+                var level = StatusCode.IsGood(result.StatusCode) && result.Value is byte b ? b : (byte)0;
+                return new UserAccess(id, (level & AccessLevels.CurrentRead) != 0, (level & AccessLevels.CurrentWrite) != 0);
+            })
+            .ToList();
     }
 
     /// <summary>Writes <paramref name="text"/>, converted to the data type the node declares.</summary>
@@ -212,7 +240,15 @@ public sealed class OpcClient : IAsyncDisposable
         }
         await subscription.ApplyChangesAsync(ct).ConfigureAwait(false);
 
-        return new SubscriptionHandle(_session, subscription);
+        var handle = new SubscriptionHandle(_session, subscription);
+        // e.g. a node the user may not read: without this check the subscription would just stay silent
+        if (subscription.MonitoredItems.FirstOrDefault(i => !i.Created || ServiceResult.IsBad(i.Status.Error)) is { } failed)
+        {
+            var status = failed.Status.Error?.StatusCode ?? (StatusCode)StatusCodes.BadUnexpectedError;
+            await handle.DisposeAsync().ConfigureAwait(false);
+            throw new ServiceResultException(status, $"Subscribing to {failed.StartNodeId} failed: {StatusCodes.GetBrowseName(status.Code)}");
+        }
+        return handle;
     }
 
     public async ValueTask DisposeAsync()

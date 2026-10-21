@@ -3,12 +3,15 @@ using Opc.Ua;
 using Opc.Ua.Server;
 using OpcSuite.Core.AddressSpace;
 using OpcSuite.Core.Modules;
+using OpcSuite.Server.Security;
 
 namespace OpcSuite.Server;
 
 /// <summary>
 /// Hosts the nodes of all <see cref="IServerModule"/>s in one OPC UA namespace. Every module gets its own folder
 /// below the standard <c>Objects</c> folder; the module only sees the protocol-neutral <see cref="INodeFolder"/> API.
+/// Every node carries the OPC UA role permissions its <see cref="AccessPolicy"/> rule grants; the stack checks them on
+/// browse, read, write and subscription sampling, so a user never sees or touches more than its roles allow.
 /// </summary>
 internal sealed class ModuleNodeManager : CustomNodeManager2
 {
@@ -29,18 +32,28 @@ internal sealed class ModuleNodeManager : CustomNodeManager2
         [typeof(DateTime)] = DataTypeIds.DateTime,
     };
 
+    // read = see the node, its value and who may access it; write adds changing the value
+    private const PermissionType ReadPermissions = PermissionType.Browse | PermissionType.ReadRolePermissions | PermissionType.Read;
+    private const PermissionType WritePermissions = ReadPermissions | PermissionType.Write;
+
     private readonly IReadOnlyList<IServerModule> _modules;
+    private readonly AccessPolicy _access;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger _logger;
+    private readonly HashSet<string> _paths = new(StringComparer.Ordinal);
     private bool _sealed;
 
     public ModuleNodeManager(
         IServerInternal server,
         ApplicationConfiguration configuration,
-        IReadOnlyList<IServerModule> modules)
+        IReadOnlyList<IServerModule> modules,
+        AccessPolicy access)
         : base(server, configuration, server.Telemetry.CreateLogger<ModuleNodeManager>(), Namespaces.Modules)
     {
         _modules = modules;
+        _access = access;
         _loggerFactory = server.Telemetry.LoggerFactory;
+        _logger = _loggerFactory.CreateLogger<ModuleNodeManager>();
     }
 
     public override void CreateAddressSpace(IDictionary<NodeId, IList<IReference>> externalReferences)
@@ -67,6 +80,12 @@ internal sealed class ModuleNodeManager : CustomNodeManager2
 
             _sealed = true;
         }
+
+        // a rule that matches nothing is almost always a typo, and then it protects nothing
+        foreach (var path in _access.Nodes.Keys.Where(p => !_paths.Contains(p)))
+        {
+            _logger.LogWarning("The access rule for '{Path}' matches no node", path);
+        }
     }
 
     private FolderState CreateFolder(NodeState? parent, string path, string name, string? description)
@@ -81,10 +100,51 @@ internal sealed class ModuleNodeManager : CustomNodeManager2
             DisplayName = new LocalizedText("en", name),
             Description = description is null ? null : new LocalizedText("en", description),
             EventNotifier = EventNotifiers.None,
+            RolePermissions = RolePermissionsFor(path),
         };
         parent?.AddChild(folder);
         return folder;
     }
+
+    /// <summary>
+    /// The role permissions for the node at <paramref name="path"/>. Never empty: the stack treats a node without
+    /// role permissions as open to everybody, so a rule that grants nothing becomes one role with no permission.
+    /// </summary>
+    private RolePermissionTypeCollection RolePermissionsFor(string path)
+    {
+        _paths.Add(path);
+        var permissions = new RolePermissionTypeCollection();
+        foreach (var (role, permission) in _access.RuleFor(path).Grants)
+        {
+            permissions.Add(new RolePermissionType
+            {
+                RoleId = role.ToStackRole().RoleId,
+                Permissions = (uint)(permission == NodePermission.Write ? WritePermissions : ReadPermissions),
+            });
+        }
+        if (permissions.Count == 0)
+        {
+            permissions.Add(new RolePermissionType { RoleId = Role.Anonymous.RoleId, Permissions = (uint)PermissionType.None });
+        }
+        return permissions;
+    }
+
+    /// <summary>What the user of the current request may do according to a node's role permissions.</summary>
+    private static PermissionType Granted(ISystemContext context, RolePermissionTypeCollection permissions)
+    {
+        var roles = (context as ISessionSystemContext)?.UserIdentity?.GrantedRoleIds;
+        var granted = PermissionType.None;
+        if (roles is not null)
+        {
+            foreach (var permission in permissions.Where(p => roles.Contains(p.RoleId)))
+            {
+                granted |= (PermissionType)permission.Permissions;
+            }
+        }
+        return granted;
+    }
+
+    private static string? UserOf(ISystemContext context) => (context as ISessionSystemContext)?.UserIdentity?.DisplayName;
 
     private void EnsureBuilding()
     {
@@ -113,12 +173,14 @@ internal sealed class ModuleNodeManager : CustomNodeManager2
             ArgumentNullException.ThrowIfNull(initialValue);
 
             var accessLevel = access == NodeAccess.ReadWrite ? AccessLevels.CurrentReadOrWrite : AccessLevels.CurrentRead;
+            var variablePath = $"{path}/{name}";
+            var permissions = owner.RolePermissionsFor(variablePath);
             var variable = new BaseDataVariableState(state)
             {
                 SymbolicName = name,
                 ReferenceTypeId = ReferenceTypes.Organizes,
                 TypeDefinitionId = VariableTypeIds.BaseDataVariableType,
-                NodeId = new NodeId($"{path}/{name}", owner.NamespaceIndex),
+                NodeId = new NodeId(variablePath, owner.NamespaceIndex),
                 BrowseName = new QualifiedName(name, owner.NamespaceIndex),
                 DisplayName = new LocalizedText("en", name),
                 Description = description is null ? null : new LocalizedText("en", description),
@@ -130,6 +192,21 @@ internal sealed class ModuleNodeManager : CustomNodeManager2
                 Value = initialValue,
                 StatusCode = StatusCodes.Good,
                 Timestamp = DateTime.UtcNow,
+                RolePermissions = permissions,
+            };
+            // UserAccessLevel tells each client what it may do itself, so tools can show what the user cannot change
+            variable.OnReadUserAccessLevel = (ISystemContext context, NodeState _, ref byte value) =>
+            {
+                var granted = Granted(context, permissions);
+                if (!granted.HasFlag(PermissionType.Read))
+                {
+                    value &= unchecked((byte)~AccessLevels.CurrentRead);
+                }
+                if (!granted.HasFlag(PermissionType.Write))
+                {
+                    value &= unchecked((byte)~AccessLevels.CurrentWrite);
+                }
+                return ServiceResult.Good;
             };
             state.AddChild(variable);
 
@@ -164,13 +241,14 @@ internal sealed class ModuleNodeManager : CustomNodeManager2
             }
         }
 
-        // Runs inside the node manager lock, before the stack stores the new value.
+        // Runs inside the node manager lock, after the stack checked the role permissions and before it stores the value.
         public ServiceResult OnClientWrite(ISystemContext context, NodeState node, ref object value)
         {
             if (value is not T typed)
             {
                 return StatusCodes.BadTypeMismatch;
             }
+            owner._logger.LogInformation("{User} wrote {Node} = {Value}", UserOf(context) ?? "unknown user", state.NodeId.Identifier, typed);
             WrittenByClient?.Invoke(typed);
             return ServiceResult.Good;
         }

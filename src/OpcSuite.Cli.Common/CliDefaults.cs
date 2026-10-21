@@ -6,8 +6,11 @@ namespace OpcSuite.Cli;
 public static class CliDefaults
 {
     /// <summary>Per-user certificate folder, e.g. <c>~/.local/share/OpcSuite/server/pki</c> on Linux.</summary>
-    public static string DefaultPki(string role) =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpcSuite", role, "pki");
+    public static string DefaultPki(string role) => DefaultFile(role, "pki");
+
+    /// <summary>A file next to the per-user certificate folder, e.g. <c>~/.local/share/OpcSuite/server/users.json</c>.</summary>
+    public static string DefaultFile(string role, string name) =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpcSuite", role, name);
 
     /// <summary>
     /// Console telemetry for the OPC UA stack. The stack is very chatty at Information level, so it is held to

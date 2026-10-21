@@ -6,14 +6,14 @@ using OpcSuite.Crypto;
 namespace OpcSuite.Client.Cli;
 
 /// <summary>
-/// The first connection, narrated: what the server offers, who is trusted, what protection was negotiated.
+/// The first connection, narrated: what the server offers, who is trusted, what protection was negotiated, who is logged in.
 /// Meant for setting up a new client/server pair and for finding out why a connection is refused.
 /// </summary>
 internal static class HandshakeCommand
 {
     public static Command Create(GlobalOptions options)
     {
-        var handshake = new Command("handshake", "Connect step by step and show what is offered, negotiated and trusted");
+        var handshake = new Command("handshake", "Connect step by step and show what is offered, negotiated, trusted and who is logged in");
         handshake.SetAction(async (parseResult, ct) =>
         {
             var settings = options.Read(parseResult);
@@ -56,9 +56,22 @@ internal static class HandshakeCommand
             Console.WriteLine($"      SHA-256             {Fingerprint.Format(serverFingerprint)}");
             Console.WriteLine($"      {(alreadyTrusted ? "already trusted by this client" : "not trusted yet by this client - compare the SHA-256 with `opcserver cert` on the server")}");
 
-            // 2. secure channel: both certificates are checked here
+            var accepted = UserLogin.Accepted(offer);
+            var wanted = settings.UserCertificate is not null ? UserTokenType.Certificate
+                : settings.User is not null ? UserTokenType.UserName
+                : UserTokenType.Anonymous;
+            Console.WriteLine($"      logins accepted     {(accepted.Count == 0 ? "none" : string.Join(", ", accepted))}");
+            if (!offer.UserIdentityTokens.Any(t => t.TokenType == wanted))
+            {
+                return Fail($"the server does not accept {UserLogin.Describe(wanted)} logins.",
+                    wanted == UserTokenType.Anonymous
+                        ? "Log in with --user <name> (password) or --user-cert <name> (user certificate)."
+                        : "Log in another way, or ask the server operator to allow it.");
+            }
+
+            // 2. secure channel: both certificates are checked here, then the user
             Console.WriteLine();
-            Console.WriteLine("[2/3] Encrypted channel and session (both sides check each other's certificate)");
+            Console.WriteLine("[2/3] Encrypted channel, session and login (both sides check each other's certificate, then the server checks the user)");
             OpcClient client;
             try
             {
@@ -68,7 +81,7 @@ internal static class HandshakeCommand
             {
                 Console.Error.WriteLine($"      FAILED {CliRunnerMessage(ex)}");
                 Console.Error.WriteLine();
-                await Connector.PrintHintAsync(crypto, ex);
+                await Connector.PrintHintAsync(settings, crypto, ex);
                 return Summary();
             }
 
@@ -85,6 +98,7 @@ internal static class HandshakeCommand
                     Console.WriteLine($"      client certificate  {own.Subject}");
                     Console.WriteLine($"      SHA-256             {Fingerprint.Format(own.Sha256Fingerprint)}  (accepted by the server)");
                 }
+                Console.WriteLine($"      logged in as        {client.Connection.User}");
 
                 // 3. proof that application data flows over the channel
                 Console.WriteLine();
@@ -101,7 +115,7 @@ internal static class HandshakeCommand
             }
 
             Console.WriteLine();
-            Console.WriteLine($"Handshake complete: both sides trust each other, all traffic is {settings.Profile}.");
+            Console.WriteLine($"Handshake complete: both sides trust each other, logged in as {client.Connection.User}, all traffic is {settings.Profile}.");
             return 0;
         });
         return handshake;

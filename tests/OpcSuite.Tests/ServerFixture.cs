@@ -7,13 +7,32 @@ using OpcSuite.Core.Modules;
 using OpcSuite.Crypto;
 using OpcSuite.Modules.Demo;
 using OpcSuite.Server;
+using OpcSuite.Server.Security;
 using Xunit;
 
 namespace OpcSuite.Tests;
 
-/// <summary>A real server on a free local port with a throw-away PKI, shared by the tests of one class.</summary>
-public sealed class ServerFixture : IAsyncLifetime
+/// <summary>A real server on a free local port with a throw-away PKI and users, shared by the tests of one class.</summary>
+public class ServerFixture : IAsyncLifetime
 {
+    /// <summary>The password of every test user.</summary>
+    public const string Password = "correct horse battery";
+
+    /// <summary>
+    /// On top of the built-in default (everybody reads; operators, engineers and supervisors write):
+    /// only engineers may change the message, only supervisors see the sensors, nobody sees the clock.
+    /// </summary>
+    public const string AccessRules = """
+        {
+          // comments are allowed
+          "nodes": {
+            "Demo/Message": { "AuthenticatedUser": "read", "Anonymous": "read", "Engineer": "write" },
+            "Demo/Sensors": { "Supervisor": "read" },
+            "Demo/Clock": { }
+          }
+        }
+        """;
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), "opcsuite-tests-" + Guid.NewGuid().ToString("N"));
 
     // set OPCSUITE_TEST_LOG=Information (or Debug, Trace) to see what the stack and the crypto module are doing
@@ -24,14 +43,31 @@ public sealed class ServerFixture : IAsyncLifetime
     });
     public OpcUaCryptoModule ServerCrypto { get; private set; } = null!;
     public OpcServerApplication Server { get; private set; } = null!;
+    public UserStore Users { get; private set; } = null!;
     public string EndpointUrl { get; private set; } = null!;
+
+    protected virtual bool AllowAnonymous => false;
+
+    public static UserLogin Login(string user) => UserLogin.Password(user, Password);
 
     public async Task InitializeAsync()
     {
+        Users = new UserStore(Path.Combine(_root, "users.json"));
+        Users.Add("operator", Password, [UserRole.Operator]);
+        Users.Add("engineer", Password, [UserRole.Engineer]);
+        Users.Add("supervisor", Password, [UserRole.Supervisor]);
+        Users.Add("observer", Password, [UserRole.Observer]);
+
         EndpointUrl = $"opc.tcp://localhost:{FreePort()}/OpcSuite";
         ServerCrypto = new OpcUaCryptoModule(Path.Combine(_root, "server-pki"), Telemetry);
         Server = new OpcServerApplication(
-            new ServerOptions { EndpointUrl = EndpointUrl },
+            new ServerOptions
+            {
+                EndpointUrl = EndpointUrl,
+                Users = Users,
+                AllowAnonymous = AllowAnonymous,
+                Access = AccessPolicy.Parse(AccessRules),
+            },
             ServerCrypto,
             new ModuleCatalog().Add<DemoModule>(),
             Telemetry);
@@ -59,8 +95,9 @@ public sealed class ServerFixture : IAsyncLifetime
             profile,
             TrustPolicies.Pinned([pinnedServerSha256 ?? Server.Certificate!.Sha256Fingerprint]));
 
+    /// <summary>Connects; without <paramref name="options"/> it logs in as the user 'operator'.</summary>
     public Task<OpcClient> ConnectAsync(OpcUaCryptoModule clientCrypto, string? endpointUrl = null, ClientOptions? options = null) =>
-        OpcClient.ConnectAsync(endpointUrl ?? EndpointUrl, clientCrypto, Telemetry, options);
+        OpcClient.ConnectAsync(endpointUrl ?? EndpointUrl, clientCrypto, Telemetry, options ?? new ClientOptions { Login = Login("operator") });
 
     /// <summary>A client the server has been told to trust (provisioned out-of-band by importing its certificate file).</summary>
     public async Task<OpcUaCryptoModule> ProvisionTrustedClientAsync()
@@ -73,7 +110,9 @@ public sealed class ServerFixture : IAsyncLifetime
         return crypto;
     }
 
-    public async Task<OpcClient> ConnectTrustedClientAsync() => await ConnectAsync(await ProvisionTrustedClientAsync());
+    /// <summary>A trusted client, logged in as 'operator' unless another <paramref name="login"/> is given.</summary>
+    public async Task<OpcClient> ConnectTrustedClientAsync(UserLogin? login = null) =>
+        await ConnectAsync(await ProvisionTrustedClientAsync(), options: new ClientOptions { Login = login ?? Login("operator") });
 
     /// <summary>
     /// The stack caches the trusted directory and treats the cache as fresh unless the directory's modification time
@@ -88,4 +127,10 @@ public sealed class ServerFixture : IAsyncLifetime
         listener.Start();
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
+}
+
+/// <summary>The same server, but it also accepts sessions without a login.</summary>
+public sealed class AnonymousServerFixture : ServerFixture
+{
+    protected override bool AllowAnonymous => true;
 }

@@ -13,7 +13,7 @@ internal static class ShellCommand
         {
             await using var client = await Connector.ConnectAsync(options.Read(parseResult), ct);
             var c = client.Connection;
-            Console.WriteLine($"Connected to {c.EndpointUrl} using {c.SecurityPolicy}/{c.SecurityMode}.");
+            Console.WriteLine($"Connected to {c.EndpointUrl} using {c.SecurityPolicy}/{c.SecurityMode}, logged in as {c.User}.");
             Console.WriteLine("Type 'help' for commands, 'exit' to leave.");
 
             // the same commands as on the command line, bound to the open connection

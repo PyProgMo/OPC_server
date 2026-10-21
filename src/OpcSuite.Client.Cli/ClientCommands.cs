@@ -20,6 +20,7 @@ internal static class ClientCommands
             Console.WriteLine($"protection   {c.SecurityPolicy} / {c.SecurityMode}");
             Console.WriteLine($"server cert  {c.ServerCertificateSubject}");
             Console.WriteLine($"SHA-256      {OpcSuite.Crypto.Fingerprint.Format(c.ServerCertificateSha256)}");
+            Console.WriteLine($"logged in    {c.User}");
             return 0;
         });
         return info;
@@ -33,7 +34,7 @@ internal static class ClientCommands
             Arity = ArgumentArity.ZeroOrOne,
         };
         var depth = new Option<int>("--depth", "-d") { Description = "How many levels to descend", DefaultValueFactory = _ => 1 };
-        var browse = new Command("browse", "List the nodes below a node");
+        var browse = new Command("browse", "List the nodes below a node, and what you may do with each variable");
         browse.Arguments.Add(node);
         browse.Options.Add(depth);
         browse.SetAction(async (parseResult, ct) =>
@@ -47,9 +48,16 @@ internal static class ClientCommands
 
     private static async Task PrintTreeAsync(OpcClient client, string? node, int depth, int indent, CancellationToken ct)
     {
-        foreach (var entry in await client.BrowseAsync(node, ct))
+        var entries = await client.BrowseAsync(node, ct);
+        // one request for all variables of this level: what the logged-in user may do with them
+        var variables = entries.Where(e => e.NodeClass is "Variable").Select(e => e.NodeId).Distinct().ToList();
+        var access = (await client.GetUserAccessAsync(variables, ct)).ToDictionary(a => a.NodeId);
+        foreach (var entry in entries)
         {
-            Console.WriteLine($"{new string(' ', indent * 2)}{entry.DisplayName}  [{entry.NodeClass}]  {entry.NodeId}");
+            var kind = access.TryGetValue(entry.NodeId, out var a)
+                ? $"{entry.NodeClass}, {(a.CanWrite ? "read/write" : a.CanRead ? "read-only" : "no access")}"
+                : entry.NodeClass;
+            Console.WriteLine($"{new string(' ', indent * 2)}{entry.DisplayName}  [{kind}]  {entry.NodeId}");
             if (depth > 1 && entry.NodeClass is "Object")
             {
                 await PrintTreeAsync(client, entry.NodeId, depth - 1, indent + 1, ct);

@@ -4,12 +4,15 @@ using Opc.Ua.Configuration;
 using Opc.Ua.Server;
 using OpcSuite.Core.Modules;
 using OpcSuite.Crypto;
+using OpcSuite.Server.Security;
 
 namespace OpcSuite.Server;
 
 /// <summary>
 /// The OPC UA server: wires the crypto module, the hosted modules and the OPC UA stack together.
 /// Only the endpoint required by <see cref="ICryptoModule.Profile"/> is offered - there is no unencrypted endpoint.
+/// Sessions log in as a user from <see cref="ServerOptions.Users"/> (or anonymously, if allowed) and every node
+/// carries the role permissions of <see cref="ServerOptions.Access"/>.
 /// </summary>
 public sealed class OpcServerApplication : IAsyncDisposable
 {
@@ -36,8 +39,33 @@ public sealed class OpcServerApplication : IAsyncDisposable
 
     public CertificateSummary? Certificate { get; private set; }
 
+    /// <summary>The kinds of login the server accepts, in the order it offers them.</summary>
+    public IReadOnlyList<UserTokenType> LoginTypes
+    {
+        get
+        {
+            var types = new List<UserTokenType>();
+            if (_options.Users is not null)
+            {
+                types.AddRange([UserTokenType.UserName, UserTokenType.Certificate]);
+            }
+            if (_options.AllowAnonymous)
+            {
+                types.Add(UserTokenType.Anonymous);
+            }
+            return types;
+        }
+    }
+
     public async Task StartAsync(CancellationToken ct = default)
     {
+        if (LoginTypes.Count == 0)
+        {
+            throw new InvalidOperationException("Nobody could log in: give the server a user store (ServerOptions.Users) or allow anonymous sessions.");
+        }
+        // a broken users file is reported now rather than at the first login
+        _options.Users?.List();
+
         var application = new ApplicationInstance(_telemetry)
         {
             ApplicationName = _options.ApplicationName,
@@ -47,11 +75,16 @@ public sealed class OpcServerApplication : IAsyncDisposable
         var applicationUri = _options.ApplicationUri ?? $"urn:{Utils.GetHostName()}:OpcSuite:Server";
         var profile = _crypto.Profile;
 
-        await application
+        var builder = application
             .Build(applicationUri, "urn:opcsuite:server")
             .AsServer([_options.EndpointUrl])
-            .AddPolicy(profile.Mode, profile.PolicyUri)
-            .AddUserTokenPolicy(UserTokenType.Anonymous)
+            .AddPolicy(profile.Mode, profile.PolicyUri);
+        foreach (var loginType in LoginTypes)
+        {
+            // no SecurityPolicyUri: passwords are encrypted with the endpoint's policy, inside the encrypted channel
+            builder = builder.AddUserTokenPolicy(loginType);
+        }
+        await builder
             .AddSecurityConfiguration(
                 _crypto.CreateApplicationCertificates($"CN={_options.ApplicationName}, O=OpcSuite, DC=localhost"),
                 _crypto.Pki.Root)
@@ -61,8 +94,14 @@ public sealed class OpcServerApplication : IAsyncDisposable
 
         Certificate = await _crypto.ActivateAsync(application, ct).ConfigureAwait(false);
 
-        var server = new HostedServer();
-        server.AddNodeManager(new ModuleNodeManagerFactory(_modules.Modules));
+        var authenticator = new UserAuthenticator(
+            _options.Users,
+            _options.AllowAnonymous,
+            new LoginThrottle(_options.MaxFailedLogins, _options.LoginLockout),
+            TimeProvider.System,
+            _telemetry.CreateLogger<UserAuthenticator>());
+        var server = new HostedServer(authenticator);
+        server.AddNodeManager(new ModuleNodeManagerFactory(_modules.Modules, _options.Access));
         await application.StartAsync(server).ConfigureAwait(false);
         _server = server;
 
@@ -71,6 +110,10 @@ public sealed class OpcServerApplication : IAsyncDisposable
         {
             // defence in depth: refuse to run if anything but the required protection is offered
             _crypto.Require(endpoint);
+            if (!_options.AllowAnonymous && endpoint.UserIdentityTokens.Any(t => t.TokenType == UserTokenType.Anonymous))
+            {
+                throw new InvalidOperationException($"Endpoint {endpoint.EndpointUrl} offers anonymous logins although they are disabled.");
+            }
         }
 
         foreach (var module in _modules.Modules)
@@ -106,8 +149,14 @@ public sealed class OpcServerApplication : IAsyncDisposable
 
     public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
 
-    private sealed class HostedServer : StandardServer
+    private sealed class HostedServer(UserAuthenticator authenticator) : StandardServer
     {
+        protected override void OnServerStarted(IServerInternal server)
+        {
+            base.OnServerStarted(server);
+            server.SessionManager.ImpersonateUser += authenticator.OnImpersonateUser;
+        }
+
         protected override ServerProperties LoadServerProperties() => new()
         {
             ManufacturerName = "OpcSuite",

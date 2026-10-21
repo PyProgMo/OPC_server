@@ -15,7 +15,8 @@ Everything else is passed to 'opcserver run', for example:
   scripts/start-server.sh --pki ./pki --no-demo
   scripts/start-server.sh -- --help        (options of the server itself)
 
-Other server commands (trust list/accept/import, cert) are run through the built binary:
+Other server commands (user add/list/cert, trust list/accept/import, cert) are run through the built binary:
+  src/OpcSuite.Server.Cli/bin/Release/net10.0/opcserver user add alice --role Operator
   src/OpcSuite.Server.Cli/bin/Release/net10.0/opcserver trust list
 USAGE
 }

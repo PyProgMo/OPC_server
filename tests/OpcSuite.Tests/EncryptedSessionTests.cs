@@ -92,7 +92,7 @@ public sealed class EncryptedSessionTests(ServerFixture fixture) : IClassFixture
         var refused = await Assert.ThrowsAsync<ServiceResultException>(() => fixture.ConnectAsync(crypto, other));
         Assert.Equal(StatusCodes.BadCertificateHostNameInvalid, refused.StatusCode);
 
-        await using var client = await fixture.ConnectAsync(crypto, other, new ClientOptions { CheckServerHostName = false });
+        await using var client = await fixture.ConnectAsync(crypto, other, new ClientOptions { CheckServerHostName = false, Login = ServerFixture.Login("operator") });
         Assert.Equal("SignAndEncrypt", client.Connection.SecurityMode);
 
         static async Task<bool> Reachable(string url)
@@ -146,7 +146,8 @@ public sealed class EncryptedSessionTests(ServerFixture fixture) : IClassFixture
     [Fact]
     public async Task Browse_lists_the_demo_module()
     {
-        await using var client = await fixture.ConnectTrustedClientAsync();
+        // the supervisor may see everything but the clock (see ServerFixture.AccessRules)
+        await using var client = await fixture.ConnectTrustedClientAsync(ServerFixture.Login("supervisor"));
 
         var objects = await client.BrowseAsync();
         var demo = Assert.Single(objects, e => e.DisplayName == "Demo");

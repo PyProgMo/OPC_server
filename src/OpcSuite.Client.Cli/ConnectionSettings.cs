@@ -5,7 +5,7 @@ using OpcSuite.Crypto;
 
 namespace OpcSuite.Client.Cli;
 
-/// <summary>The options every command shares: where to connect, with which protection, whom to trust.</summary>
+/// <summary>The options every command shares: where to connect, with which protection, whom to trust, who to log in as.</summary>
 internal sealed class GlobalOptions
 {
     public Option<string> Endpoint { get; } = new("--endpoint", "-e")
@@ -36,6 +36,18 @@ internal sealed class GlobalOptions
         Recursive = true,
     };
 
+    public Option<string?> User { get; } = new("--user", "-u")
+    {
+        Description = $"Log in as this user. The password is asked for, or read from {Passwords.EnvironmentVariable}",
+        Recursive = true,
+    };
+
+    public Option<string?> UserCertificate { get; } = new("--user-cert")
+    {
+        Description = "Log in with a user certificate: a name made with 'opcctl user-cert create', or a .pfx file",
+        Recursive = true,
+    };
+
     public Option<string> LogLevel { get; } = new("--log-level")
     {
         Description = "Log level of the OPC UA stack (Trace, Debug, Information, Warning, Error, Critical)",
@@ -50,6 +62,8 @@ internal sealed class GlobalOptions
         command.Options.Add(Security);
         command.Options.Add(TrustServer);
         command.Options.Add(SkipHostCheck);
+        command.Options.Add(User);
+        command.Options.Add(UserCertificate);
         command.Options.Add(LogLevel);
     }
 
@@ -71,13 +85,21 @@ internal sealed class GlobalOptions
                 throw new ArgumentException($"--trust-server expects the full SHA-256 fingerprint (64 hex digits), got '{pin}'.");
             }
         }
+        var user = parseResult.GetValue(User);
+        var userCertificate = parseResult.GetValue(UserCertificate);
+        if (user is not null && userCertificate is not null)
+        {
+            throw new ArgumentException("Log in either with --user (password) or with --user-cert, not both.");
+        }
         return new ConnectionSettings(
             parseResult.GetValue(Endpoint)!,
             parseResult.GetValue(Pki)!,
             profile,
             pins,
             !parseResult.GetValue(SkipHostCheck),
-            level);
+            level,
+            user,
+            userCertificate);
     }
 }
 
@@ -87,4 +109,6 @@ internal sealed record ConnectionSettings(
     SecurityProfile Profile,
     IReadOnlyList<string> PinnedServers,
     bool CheckServerHostName,
-    LogLevel StackLevel);
+    LogLevel StackLevel,
+    string? User,
+    string? UserCertificate);

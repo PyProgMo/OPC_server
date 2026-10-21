@@ -6,7 +6,8 @@ public sealed record ConnectionInfo(
     string SecurityPolicy,
     string SecurityMode,
     string ServerCertificateSubject,
-    string ServerCertificateSha256);
+    string ServerCertificateSha256,
+    string User);
 
 public sealed record BrowseEntry(string NodeId, string DisplayName, string NodeClass);
 
@@ -16,3 +17,6 @@ public sealed record NodeValue(
     string DataType,
     string Status,
     DateTime? SourceTimestampUtc);
+
+/// <summary>What the logged-in user may do with a variable (its UserAccessLevel).</summary>
+public sealed record UserAccess(string NodeId, bool CanRead, bool CanWrite);

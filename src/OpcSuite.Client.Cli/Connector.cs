@@ -20,6 +20,20 @@ internal static class Connector
         return (new OpcUaCryptoModule(settings.PkiRoot, telemetry, settings.Profile, policy), telemetry);
     }
 
+    /// <summary>The login the options ask for: a user certificate, a user name (password asked for now), or none.</summary>
+    public static UserLogin CreateLogin(ConnectionSettings settings, ICryptoModule crypto)
+    {
+        if (settings.UserCertificate is { } certificate)
+        {
+            return UserLogin.Certificate(UserCertificates.Load(UserCertificates.DirectoryOf(crypto.Pki), certificate));
+        }
+        if (settings.User is { } user)
+        {
+            return UserLogin.Password(user, Passwords.Read($"Password for {user}: "));
+        }
+        return UserLogin.Anonymous;
+    }
+
     public static async Task<OpcClient> ConnectAsync(ConnectionSettings settings, CancellationToken ct)
     {
         var (crypto, telemetry) = CreateCrypto(settings);
@@ -31,14 +45,14 @@ internal static class Connector
     {
         try
         {
-            return await OpcClient.ConnectAsync(
-                settings.Endpoint, crypto, telemetry, new ClientOptions { CheckServerHostName = settings.CheckServerHostName }, ct);
+            var options = new ClientOptions { CheckServerHostName = settings.CheckServerHostName, Login = CreateLogin(settings, crypto) };
+            return await OpcClient.ConnectAsync(settings.Endpoint, crypto, telemetry, options, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             if (printHint)
             {
-                await PrintHintAsync(crypto, ex);
+                await PrintHintAsync(settings, crypto, ex);
             }
             throw;
         }
@@ -55,8 +69,16 @@ internal static class Connector
         return Console.ReadLine()?.Trim().ToLowerInvariant() is "y" or "yes";
     }
 
-    public static async Task PrintHintAsync(OpcUaCryptoModule crypto, Exception ex)
+    public static async Task PrintHintAsync(ConnectionSettings settings, OpcUaCryptoModule crypto, Exception ex)
     {
+        if (ex is LoginNotAcceptedException notAccepted)
+        {
+            Console.Error.WriteLine(notAccepted.Requested == UserTokenType.Anonymous
+                ? "The server wants a login: add --user <name> (password) or --user-cert <name> (user certificate)."
+                : "Log in another way, or ask the server operator to allow this kind of login.");
+            return;
+        }
+
         switch ((ex as ServiceResultException)?.StatusCode)
         {
             case StatusCodes.BadSecurityChecksFailed:
@@ -79,6 +101,28 @@ internal static class Connector
                 // the client refused the server's certificate
                 Console.Error.WriteLine("This client does not trust the server's certificate. Get its SHA-256 from the server operator");
                 Console.Error.WriteLine("(opcserver cert) and connect with --trust-server <SHA-256> - or answer 'y' when asked in a terminal.");
+                break;
+
+            case StatusCodes.BadUserAccessDenied:
+                // the channel is fine, the login is not; the server does not say why, on purpose
+                Console.Error.WriteLine($"The server refused the login as '{settings.User}'. Check the user name and password.");
+                Console.Error.WriteLine("After several wrong attempts in a row a user is locked for a while (by default 5 attempts, 1 minute).");
+                Console.Error.WriteLine("The operator can check the user with: opcserver user list");
+                break;
+
+            case StatusCodes.BadIdentityTokenRejected or StatusCodes.BadIdentityTokenInvalid:
+                if (settings.UserCertificate is { } name)
+                {
+                    using var certificate = UserCertificates.Load(UserCertificates.DirectoryOf(crypto.Pki), name);
+                    var fingerprint = Fingerprint.Sha256(certificate);
+                    Console.Error.WriteLine("The server refused the user certificate. It may not be registered yet; ask the operator to run:");
+                    Console.Error.WriteLine($"  opcserver user cert add <user> {fingerprint}");
+                    Console.Error.WriteLine("It is also refused when expired or weak.");
+                }
+                else
+                {
+                    Console.Error.WriteLine("The server refused this kind of login.");
+                }
                 break;
         }
     }

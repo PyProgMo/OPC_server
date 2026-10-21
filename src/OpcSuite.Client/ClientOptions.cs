@@ -14,4 +14,7 @@ public sealed record ClientOptions
     public bool CheckServerHostName { get; init; } = true;
 
     public TimeSpan SessionTimeout { get; init; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>Who to log in as once the encrypted channel is open.</summary>
+    public UserLogin Login { get; init; } = UserLogin.Anonymous;
 }

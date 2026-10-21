@@ -8,12 +8,14 @@ var options = new GlobalOptions();
 
 var root = new RootCommand(
     "OpcSuite OPC UA client. Connects only over a signed and encrypted (SHA-256) channel " +
-    "and only to servers whose certificate you trust.");
+    "and only to servers whose certificate you trust, then logs in with --user or --user-cert.");
 root.Options.Add(options.Endpoint);
 root.Options.Add(options.Pki);
 root.Options.Add(options.Security);
 root.Options.Add(options.TrustServer);
 root.Options.Add(options.SkipHostCheck);
+root.Options.Add(options.User);
+root.Options.Add(options.UserCertificate);
 root.Options.Add(options.LogLevel);
 
 foreach (var command in ClientCommands.Create(new ConnectEachTime(options)))
@@ -23,6 +25,7 @@ foreach (var command in ClientCommands.Create(new ConnectEachTime(options)))
 root.Subcommands.Add(HandshakeCommand.Create(options));
 root.Subcommands.Add(ShellCommand.Create(options));
 root.Subcommands.Add(EndpointsCommand(options));
+root.Subcommands.Add(UserCertCommand.Create(options));
 root.Subcommands.Add(TrustCommands.CreateTrust(options.Pki));
 root.Subcommands.Add(TrustCommands.CreateCert(options.Pki));
 
@@ -45,6 +48,7 @@ static Command EndpointsCommand(GlobalOptions options)
                 Console.WriteLine($"  certificate {cert.Subject}");
                 Console.WriteLine($"  SHA-256     {Fingerprint.Format(Fingerprint.Sha256(cert))}");
             }
+            Console.WriteLine($"  logins      {string.Join(", ", UserLogin.Accepted(endpoint))}");
         }
         return 0;
     });
