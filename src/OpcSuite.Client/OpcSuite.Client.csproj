@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Client" />
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Configuration" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OpcSuite.Crypto\OpcSuite.Crypto.csproj" />
+  </ItemGroup>
+</Project>

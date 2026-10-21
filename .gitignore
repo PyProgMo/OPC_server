@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+*.user
+# generated PKI material (contains private keys) and logs
+pki/
+**/pki/
+*.pfx
+*.log

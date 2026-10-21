@@ -1,0 +1,20 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- OPC Foundation UA .NET Standard stack (https://github.com/OPCFoundation/UA-.NETStandard).
+         Pinned to the long-established 1.5.378 line; the 2.0.x line is only weeks old. -->
+    <PackageVersion Include="OPCFoundation.NetStandard.Opc.Ua.Core" Version="1.5.378.182" />
+    <PackageVersion Include="OPCFoundation.NetStandard.Opc.Ua.Configuration" Version="1.5.378.182" />
+    <PackageVersion Include="OPCFoundation.NetStandard.Opc.Ua.Server" Version="1.5.378.182" />
+    <PackageVersion Include="OPCFoundation.NetStandard.Opc.Ua.Client" Version="1.5.378.182" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.13" />
+    <PackageVersion Include="System.CommandLine" Version="2.0.13" />
+    <!-- tests -->
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+</Project>

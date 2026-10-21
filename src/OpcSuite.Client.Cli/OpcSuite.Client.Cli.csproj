@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>opcctl</AssemblyName>
+    <RootNamespace>OpcSuite.Client.Cli</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OpcSuite.Client\OpcSuite.Client.csproj" />
+    <ProjectReference Include="..\OpcSuite.Cli.Common\OpcSuite.Cli.Common.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>opcserver</AssemblyName>
+    <RootNamespace>OpcSuite.Server.Cli</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OpcSuite.Server\OpcSuite.Server.csproj" />
+    <ProjectReference Include="..\OpcSuite.Cli.Common\OpcSuite.Cli.Common.csproj" />
+    <ProjectReference Include="..\Modules\OpcSuite.Modules.Demo\OpcSuite.Modules.Demo.csproj" />
+  </ItemGroup>
+</Project>

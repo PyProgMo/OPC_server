@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\OpcSuite.Core\OpcSuite.Core.csproj" />
+  </ItemGroup>
+</Project>
